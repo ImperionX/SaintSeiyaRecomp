@@ -22,6 +22,16 @@
 #include "runtime.h"
 #include "gs.h"
 #include "gpu.h"
+#include "gpu_backend.h"
+
+#define gpu_init vk_init
+#define gpu_upload vk_upload
+#define gpu_render vk_render
+#define gpu_present vk_present
+#define gpu_set_vsync vk_set_vsync
+#define gpu_vsync vk_vsync
+#define gpu_read_display vk_read_display
+#define gpu_set_overlay vk_set_overlay
 
 int kernel_ntsc(void);
 #include "shaders.h"        /* generated from port/gs/shaders by configure.py */
@@ -687,3 +697,7 @@ int gpu_read_display(u32 *out, int max_w, int max_h, int *pw, int *ph) {
     SDL_ReleaseGPUTransferBuffer(dev, tb);
     return 0;
 }
+static u64 vk_window_flags(void) { return 0; }
+
+const GpuBackend gpu_backend_vk = {"vulkan", vk_window_flags, vk_init, vk_upload, vk_render, vk_present,
+                                   vk_set_vsync, vk_vsync, vk_read_display, vk_set_overlay};

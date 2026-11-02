@@ -21,7 +21,7 @@
 #include "gpu.h"
 #include <sys/resource.h>
 
-void gpu_set_overlay(const u32 *px, int w, int h);   /* gpu_vk.c */
+void gpu_set_overlay(const u32 *px, int w, int h);   /* gpu_vk.c ---> gpu_backend.c*/
 
 int gs_display(u32 *out, int max_w, int max_h, int *w, int *h);
 void gs_init(void);
@@ -130,6 +130,18 @@ static void save_ppm(const char *path, const u32 *px, int w, int h) {
 
 static void panel_update(void);
 
+/* F12: save the picture as it is now (the PS2's own size) as build/live_NNN_vbVVVV.ppm */
+static void live_shot(void) {
+    static int n;
+    int w, h;
+    if (gpu_on) gpu_read_display(frame, 1024, 1024, &w, &h);
+    else gs_display(frame, 1024, 1024, &w, &h);
+    char path[64];
+    snprintf(path, sizeof path, "build/live_%03d_vb%u.ppm", ++n, kernel_vblank_count());
+    save_ppm(path, frame, w, h);
+    fprintf(stderr, "screenshot: %s (%dx%d)\n", path, w, h);
+}
+
 /* Headless: save the picture at each vertical blank listed (ascending), then exit. */
 /* GPU renderer, headless: take the frames sealed since the last call, show the newest */
 static void gpu_vblank(void) {
@@ -156,12 +168,13 @@ static GpuVertex *interpolate(const GpuFrame *a, const GpuFrame *b, float t) {
     memcpy(out, b->verts, b->nverts * sizeof *out);
     for (u32 i = 0; i < b->ndraws && i < a->ndraws; i++) {
         const GpuDraw *db = &b->draws[i], *da = &a->draws[i];
-        if (da->count != db->count || da->fbp != db->fbp || da->textured != db->textured || (da->tex < -1) != (db->tex < -1))
-            continue;
+        if (da->count != db->count || da->fbp != db->fbp || da->textured != db->textured || da->tex != db->tex || da->first != db->first)
+            continue;    
         const GpuVertex *va = &a->verts[da->first], *vb = &b->verts[db->first];
         int far = 0;
         for (u32 k = 0; k < db->count && !far; k++)
-            far = fabsf(vb[k].x - va[k].x) > 80.0f || fabsf(vb[k].y - va[k].y) > 80.0f;
+            far = fabsf(vb[k].s - va[k].s) > 0.05f || fabsf(vb[k].t - va[k].t) > 0.05f
+               || fabsf(vb[k].x - va[k].x) > 80.0f || fabsf(vb[k].y - va[k].y) > 80.0f;
         if (far) continue;
         GpuVertex *o = &out[db->first];
         for (u32 k = 0; k < db->count; k++) {
@@ -173,6 +186,23 @@ static GpuVertex *interpolate(const GpuFrame *a, const GpuFrame *b, float t) {
     return out;
 }
 
+/* Interpolation only makes sense if both frames draw the same things: some draws in the same orden, same textures, same UV.
+ * One mismatch and the frame is shown as it is*/
+ 
+ static int pairable(const GpuFrame *a, const GpuFrame *b){
+	 if(a->ndraws != b->ndraws) return 0;
+	 for (u32 i = 0; i < b->ndraws; i++) {
+	 	 const GpuDraw *db = &b->draws[i], *da = &a->draws[i];
+	 	 if (da->count != db->count || da->fbp != db->fbp || da->textured != db->textured ||
+	 	     da->tex != db->tex || da->first != db->first) return 0;
+	 	 const GpuVertex *va = &a->verts[da->first], *vb = &b->verts[db->first];
+	 	 for (u32 k = 0; k < db->count; k++)
+	 		 if(fabsf(vb[k].s - va[k].s) > 0.05f || fabsf(vb[k].t - va[k].t) > 0.05f ||
+                fabsf(vb[k].x - va[k].x) > 80.0f || fabsf(vb[k].y - va[k].y) > 80.0f) return 0;
+     }
+     return 1;
+ }               
+ 
 int display_shots(const int *at, int n) {
     gs_init();
     if (gpu_on && (!SDL_Init(SDL_INIT_VIDEO) || gpu_init(NULL))) gpu_on = 0;
@@ -297,8 +327,9 @@ static void overlay_update(void) {
  * with vsync: SSTHEH_VSYNC=1 or F4), show the game's newest frame, moved part of the way from the one before
  * it by the time since it came (SSTHEH_INTERP=0: the newest frame as it is). */
 static int display_window_gpu(void) {
-    SDL_Window *win = SDL_CreateWindow("Saint Seiya: The Hades", 1280, 960, SDL_WINDOW_RESIZABLE);
-    if (!win || gpu_init(win)) return -1;
+    SDL_Window *win = SDL_CreateWindow("Saint Seiya: The Hades", 1280, 960, SDL_WINDOW_RESIZABLE | gpu_window_flags());
+    if (!win) return -1; 
+    if (gpu_init(win)){ SDL_DestroyWindow(win); return -1;}
     int interp = !(getenv("SSTHEH_INTERP") && !atoi(getenv("SSTHEH_INTERP")));
     GpuFrame *fa = NULL, *fb = NULL;    /* the frame before, the newest */
     u64 tb = 0, period = 20000000;      /* when the newest came; time between frames (ns) */
@@ -310,6 +341,7 @@ static int display_window_gpu(void) {
             if (e.type == SDL_EVENT_QUIT) { SDL_Quit(); _exit(0); }
             if (e.type == SDL_EVENT_GAMEPAD_ADDED && !gamepad) gamepad = SDL_OpenGamepad(e.gdevice.which);
             if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_F3) panel_on = !panel_on;
+            if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_F12) live_shot();
             if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_F4) gpu_set_vsync(!gpu_vsync());
         }
         pad_buttons[0] = keyboard() | gamepad_buttons() | scripted(kernel_vblank_count());
@@ -338,7 +370,9 @@ static int display_window_gpu(void) {
             final_shown = 0;
         }
         if (!fb) { SDL_Delay(1); continue; }
-        float t = interp && fa ? (float)(now - tb) / (float)period : 1.0f;
+        int consecutive = interp && fa && !fa->merged && !fb->merged && fa->seq + 1 == fb->seq;
+        if (consecutive && !pairable(fa, fb)) consecutive = 0; 
+        float t = consecutive ? (float)(now - tb) / (float)period : 1.0f;
         if (t >= 1.0f) {
             if (final_shown) { SDL_Delay(1); continue; }
             t = 1.0f;
@@ -370,6 +404,7 @@ int display_window(void) {
             if (e.type == SDL_EVENT_QUIT) { SDL_Quit(); _exit(0); }
             if (e.type == SDL_EVENT_GAMEPAD_ADDED && !gamepad) gamepad = SDL_OpenGamepad(e.gdevice.which);
             if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_F3) panel_on = !panel_on;
+            if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_F12) live_shot();
         }
         pad_buttons[0] = keyboard() | gamepad_buttons() | scripted(kernel_vblank_count());
         u32 vb = kernel_vblank_count();
@@ -389,5 +424,6 @@ int display_window(void) {
         panel_update();
         panel_draw(ren);
         SDL_RenderPresent(ren);
+        render_frames++;
     }
 }

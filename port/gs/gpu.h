@@ -52,6 +52,7 @@ typedef struct {
     u32 nfrees, cap_frees;
     u64 priv[5];                /* PMODE, DISPFB1, DISPLAY1, DISPFB2, DISPLAY2 when it was sealed */
     u32 seq;                    /* sealed frames are numbered */
+    u32 merged;                 /* more than one picture (the pool was full) */
 } GpuFrame;
 
 extern int gpu_on;              /* the GPU renderer records instead of rasterising */
@@ -66,6 +67,7 @@ void gpu_release_frame(GpuFrame *f);
 u32 gpu_tex_stats(u64 *bytes);                   /* textures alive and their decoded bytes */
 
 /* window's thread (gpu_vk.c) */
+u64 gpu_window_flags(void);
 int gpu_init(void *sdl_window);                  /* window NULL: off screen (--shot) */
 void gpu_upload(GpuFrame *f);                    /* a new frame's textures (once per frame) */
 void gpu_render(GpuFrame *f, const GpuVertex *verts);   /* replay a frame (verts: NULL, or moved copies) */

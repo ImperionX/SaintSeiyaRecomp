@@ -38,4 +38,5 @@ elif [ -n "$(find port tools/recomp configure.py -newer build/sstheh -type f 2>/
     ./compilar.sh
 fi
 
+#export SSTHEH_SCALE=1 #SSTHEH_INTERP=0 
 exec ./build/sstheh "$@"
