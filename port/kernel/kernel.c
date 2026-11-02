@@ -33,6 +33,7 @@
 #define MAX_HANDLERS 64
 #define MAX_ALARMS 64
 #define RAM_END 0x02000000u
+#define IRQ_STACK_TOP 0x000F0000u   /* below the game image and the heap */
 #define KERNEL_SYSCALL_TABLE 0x80000800u  /* stand-in for the kernel's own table, in kernel RAM */
 
 enum { T_FREE, T_DORMANT, T_READY, T_WAIT, T_SUSPEND };
@@ -220,8 +221,9 @@ static void run_interrupts(void) {
     iop_kick(&irq_ctx);                             /* calls the IOP's modules queued for the EE */
     if (!timer_vblank && !iop_pending() && !dmac_pending) return;
     in_irq = 1;
-    /* irq_ctx gets its own stack at the top of RAM, below the main thread's area */
-    irq_ctx.r[29].d[0] = RAM_END - 0x100000;
+    /* irq_ctx runs on its own stack in low RAM: below the game image and outside the heap
+     * (SetupHeap ends at 0x1F80000), so interrupt frames cannot clobber live buffers. */
+    irq_ctx.r[29].d[0] = IRQ_STACK_TOP;
     if (iop_pending()) iop_deliver(&irq_ctx, raise_sif0);
     while (dmac_pending) {
         int ch = __builtin_ctz(dmac_pending);
